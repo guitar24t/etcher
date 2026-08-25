@@ -70,7 +70,36 @@ jobs:
       - name: Build
         # Forge can only build for the host platform/arch, which is why the
         # matrix uses one runner per target rather than cross-compiling.
-        run: npx electron-forge make
+        #
+        # Retried because appdmg races hdiutil on macOS runners: it mounts the
+        # staging volume, then intermittently finds it already gone when it
+        # detaches, failing the whole make with
+        #   hdiutil detach /Volumes/balenaEtcher: No such file or directory
+        # The same job succeeds on a re-run, so treat it as flaky rather than
+        # dropping the .dmg target. A stale mount left behind by a failed
+        # attempt would break the next one, so clear it in between.
+        shell: bash
+        run: |
+          detach_stale() {
+            if [ "$RUNNER_OS" = "macOS" ]; then
+              for vol in /Volumes/balenaEtcher*; do
+                [ -d "$vol" ] && hdiutil detach "$vol" -force || true
+              done
+            fi
+          }
+
+          attempt=1
+          max=3
+          detach_stale
+          until npx electron-forge make; do
+            if [ "$attempt" -ge "$max" ]; then
+              echo "::error::electron-forge make failed after $max attempts"
+              exit 1
+            fi
+            echo "::warning::Build attempt $attempt failed; cleaning up and retrying"
+            detach_stale
+            attempt=$((attempt + 1))
+          done
 
       - name: Collect artifacts
         shell: bash
