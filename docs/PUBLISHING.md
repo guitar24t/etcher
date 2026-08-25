@@ -111,7 +111,36 @@ The release notes repeat this for anyone downloading a build.
 Auto-updates
 ------------
 
-`packageType` in `package.json` is `local`, which leaves `packageUpdatable`
-false in `lib/gui/etcher.ts`. These builds therefore never check for updates,
-and will not try to replace themselves with an upstream balena release. Keep it
-that way unless you stand up an update feed of your own.
+Updates come from **this fork's own releases** — `UPDATE_REPOSITORY` in
+`lib/shared/update-support.ts`. A build from here must never replace itself
+with one from balena upstream, so that constant is the single place the
+repository is named.
+
+`update-electron-app` drives this against `update.electronjs.org`, which reads
+the repository's GitHub releases. electron-updater, which the project used
+before, cannot: it ships an `NsisUpdater` for Windows and electron-forge
+produces Squirrel installers, so there was no configuration that would have
+made it work.
+
+What the service needs from a release is produced automatically:
+
+- **Windows** — `RELEASES` and the `.nupkg` alongside `Setup.exe`. These are
+  Squirrel's update feed; the workflow publishes them for exactly this reason.
+- **macOS** — the `.zip` (Squirrel.Mac updates from a zip, not the `.dmg`).
+
+Requirements and limits:
+
+- The repository must be **public**, since update.electronjs.org will not serve
+  a private one.
+- **macOS updates require a real Developer ID signature.** Squirrel.Mac refuses
+  to update an ad-hoc signed bundle, so unsigned builds check and fail. The
+  error is logged and deliberately kept out of Sentry, because it would repeat
+  on every interval. Signing the builds is all that is needed to enable it.
+- **Windows updates only apply to an installed app.** Squirrel needs its
+  `Update.exe`, which exists next to an app installed by `Setup.exe` and not in
+  an extracted `.zip`; `isUpdateSupported()` checks for it.
+- **Linux is not auto-updated.** `.deb` and `.rpm` are the package manager's
+  business and the `.zip` has no updater.
+- The `updatesEnabled` setting is read once at startup, since
+  `update-electron-app` owns its own timer. Toggling it takes effect on the
+  next launch.

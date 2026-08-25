@@ -125,9 +125,15 @@ jobs:
             -iname "*.rpm"      -o \
             -iname "*.deb"      -o \
             -iname "*.AppImage" -o \
-            -iname "*Setup.exe"    \
+            -iname "*Setup.exe" -o \
+            -iname "*.nupkg"    -o \
+            -iname "RELEASES"      \
           \) -exec cp {} dist/ \;
 
+          # RELEASES and the .nupkg are Squirrel.Windows' update feed. They
+          # are what lets an installed app update itself from a GitHub
+          # release; without them update.electronjs.org has nothing to serve.
+          #
           # Squirrel names the installer "balenaEtcher-<version> Setup.exe".
           # GitHub rewrites spaces to dots when it attaches a release asset,
           # so the published name would no longer match the one recorded in
