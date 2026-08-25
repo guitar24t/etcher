@@ -33,18 +33,44 @@ Building locally
 
 ```sh
 npm ci
+npm run install-win-deps   # Windows only; a no-op elsewhere
 npm run make
 ```
 
 Artifacts land in `out/make`.
 
-**Node 22 is required — not merely recommended.** `forge.sidecar.ts` packages
-the `etcher-util` sidecar with `pkg --target node22.22.2`, so the sidecar
-embeds a Node 22 runtime. `mountutils` is not an N-API addon and is rebuilt
-against whichever Node runs the build, so building on Node 20 (ABI 115) or
-Node 24 (ABI 137) produces an addon the Node 22 sidecar (ABI 127) cannot load.
+**Node 24 is required — not merely recommended.** `forge.sidecar.ts` packages
+the `etcher-util` sidecar with `pkg --target node24.18.1`, so the sidecar
+embeds a Node 24 runtime. `mountutils` is the one bundled addon that is not
+N-API, and it is rebuilt against whichever Node runs the build, so building on
+Node 22 (ABI 127) produces an addon the Node 24 sidecar (ABI 137) cannot load.
 The failure is silent at build time and only shows up as a sidecar that dies
-the moment drive scanning starts. `engines` pins this.
+the moment drive scanning starts. `engines` pins this. Patch releases share an
+ABI, so any 24.x will do; changing major means changing the `pkg --target` to
+match.
+
+Two consequences of npm 11, which ships with Node 24:
+
+- **`allowScripts` in `package.json`** is npm's record of which dependencies
+  may run install scripts. Without it npm silently skips them — including
+  Electron's own, which is what downloads the Electron binary, so nothing
+  builds at all. Adding or upgrading a dependency with an install script means
+  re-running `npm approve-scripts --all` and committing the result.
+- **`@electron/node-gyp` is overridden** to the real `node-gyp`. It arrives via
+  `@electron/rebuild`, declares `bin: node-gyp`, and so owns
+  `node_modules/.bin/node-gyp` — which npm puts ahead of everything else on
+  PATH for install scripts. Every native module then gets built with Electron's
+  ClangCL toolchain instead of MSVC, which fails outright unless ClangCL
+  happens to be installed. These addons are loaded by the pkg sidecar rather
+  than by Electron (see `rebuildConfig.onlyModules: []`), so they must be built
+  for Node, making the override the correct behaviour and not just a
+  workaround.
+
+`npm run install-win-deps` builds `winusb-driver-generator`, which npm skips on
+Windows because its `engines` field caps out below the Node version in use.
+Re-run it after **any** `npm install`, not just the first: npm prunes the
+package whenever it reconciles the tree. Packaging refuses to continue without
+it rather than shipping a sidecar that dies on its first drive scan.
 
 Per-platform prerequisites:
 

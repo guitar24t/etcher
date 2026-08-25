@@ -14,11 +14,11 @@ on:
 # forge.config.ts only enables Developer ID signing, notarization and Windows
 # signtool when it is, and none of those credentials exist here.
 env:
-  # Must stay in sync with the pkg --target in forge.sidecar.ts. The sidecar
-  # embeds a Node 22 runtime, and `mountutils` is a non-N-API addon that is
-  # rebuilt against whatever Node builds it, so a mismatch produces a sidecar
-  # that cannot load its own native modules at runtime.
-  NODE_VERSION: '22.22.2'
+  # Must stay on the same major as the pkg --target in forge.sidecar.ts.
+  # `mountutils` is a non-N-API addon rebuilt against whatever Node builds
+  # the project, and NAN addons are ABI-locked per major, so a major mismatch
+  # produces a sidecar that cannot load its own native modules at runtime.
+  NODE_VERSION: '24.18.1'
 
 # Least privilege by default; only the release job gets write access.
 permissions:
@@ -73,6 +73,13 @@ jobs:
 
       - name: Install dependencies
         run: npm ci
+
+      - name: Install Windows-only native dependencies
+        # No-op off Windows. Must run after every npm install, not just the
+        # first: npm treats winusb-driver-generator as an unsatisfiable
+        # optional dependency and prunes it whenever it reconciles the tree.
+        # The sidecar build refuses to package without it.
+        run: npm run install-win-deps
 
       - name: Build
         # Forge can only build for the host platform/arch, which is why the
