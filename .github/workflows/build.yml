@@ -20,9 +20,16 @@ env:
   # that cannot load its own native modules at runtime.
   NODE_VERSION: '22.22.2'
 
+# Least privilege by default; only the release job gets write access.
+permissions:
+  contents: read
+
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  # Superseded branch builds are worth cancelling, but a tag build is
+  # publishing a release: cancelling it midway leaves a release with only
+  # some of its assets attached.
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
 
 jobs:
   build:
@@ -113,6 +120,18 @@ jobs:
             -iname "*.AppImage" -o \
             -iname "*Setup.exe"    \
           \) -exec cp {} dist/ \;
+
+          # Squirrel names the installer "balenaEtcher-<version> Setup.exe".
+          # GitHub rewrites spaces to dots when it attaches a release asset,
+          # so the published name would no longer match the one recorded in
+          # SHA256SUMS.txt. Normalise here, before anything hashes it.
+          for f in dist/*; do
+            base=${f##*/}
+            case $base in
+              *\ *) mv "$f" "dist/$(printf '%s' "$base" | tr ' ' '.')" ;;
+            esac
+          done
+
           ls -la dist
 
       - name: Upload artifacts
@@ -158,3 +177,42 @@ jobs:
               --title "$GITHUB_REF_NAME" \
               --generate-notes
           fi
+
+      - name: Prepend installation notes
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # These builds carry no Developer ID or Authenticode certificate, so
+          # both OSes object on first launch — macOS in particular reports an
+          # ad-hoc signed app as "damaged", which reads like a corrupt
+          # download. Say so on the release rather than leaving people to
+          # work it out.
+          body=$(gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --json body --jq .body)
+
+          # Re-runs re-upload assets against an existing release; don't stack
+          # another copy of the notes on top.
+          case $body in
+            *'### Installing'*) echo 'notes already present'; exit 0 ;;
+          esac
+
+          cat > notes.md <<'NOTE'
+          ### Installing
+
+          These builds are **unsigned**, so the OS will object on first launch.
+
+          **Windows** — SmartScreen shows "Windows protected your PC". Choose **More info**, then **Run anyway**.
+
+          **macOS** — the app is ad-hoc signed but not notarized, so Gatekeeper reports it as damaged. Copy it to Applications, then clear the quarantine flag:
+
+          ```
+          xattr -dr com.apple.quarantine /Applications/balenaEtcher.app
+          ```
+
+          Check a download against `SHA256SUMS.txt` before installing it.
+
+          ---
+
+          NOTE
+
+          printf '%s\n' "$body" >> notes.md
+          gh release edit "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --notes-file notes.md

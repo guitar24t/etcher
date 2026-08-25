@@ -1,82 +1,91 @@
 Publishing Etcher
 =================
 
-This is a small guide to package and publish Etcher to all supported operating
-systems.
+This fork builds and publishes its own releases from GitHub Actions
+(`.github/workflows/build.yml`). Nothing is published to balena's channels.
 
-Release Types
--------------
+Cutting a release
+-----------------
 
-Etcher supports **pre-release** and **final** release types as does Github. Each is
-published to Github releases.
-The release version is generated automatically from the commit messasges.
+1. Bump `version` in `package.json` and the two matching `version` fields at
+   the top of `npm-shrinkwrap.json`.
+2. Add a section to `CHANGELOG.md`.
+3. Commit, then tag and push:
+
+   ```sh
+   git tag -a v2.1.7 -m v2.1.7
+   git push origin v2.1.7
+   ```
+
+Pushing a `v*` tag builds all four targets and publishes them to a GitHub
+release along with `SHA256SUMS.txt`. The release job only runs if every
+platform built, so a release is never partially populated.
+
+| Target       | Runner            | Artifacts                |
+| ------------ | ----------------- | ------------------------ |
+| Linux x64    | `ubuntu-22.04`    | `.deb`, `.rpm`, `.zip`   |
+| Windows x64  | `windows-2022`    | `Setup.exe`, `.zip`      |
+| macOS arm64  | `macos-15`        | `.dmg`, `.zip`           |
+| macOS x64    | `macos-15-intel`  | `.dmg`, `.zip`           |
+
+Building locally
+----------------
+
+```sh
+npm ci
+npm run make
+```
+
+Artifacts land in `out/make`.
+
+**Node 22 is required — not merely recommended.** `forge.sidecar.ts` packages
+the `etcher-util` sidecar with `pkg --target node22.22.2`, so the sidecar
+embeds a Node 22 runtime. `mountutils` is not an N-API addon and is rebuilt
+against whichever Node runs the build, so building on Node 20 (ABI 115) or
+Node 24 (ABI 137) produces an addon the Node 22 sidecar (ABI 127) cannot load.
+The failure is silent at build time and only shows up as a sidecar that dies
+the moment drive scanning starts. `engines` pins this.
+
+Per-platform prerequisites:
+
+- **Windows** — Visual Studio with the C++ workload. `winusb-driver-generator`
+  compiles libwdi from source, and its `deps/embed.bat` invokes `embedder.exe`
+  from the working directory, so the build fails with
+  `'embedder.exe' is not recognized` if `NoDefaultCurrentDirectoryInExePath=1`
+  is set in the environment. Unset it before building.
+- **Linux** — `fakeroot`, `dpkg` and `rpm` for the packaging targets. Note that
+  `rpmbuild` strips binaries by default, which corrupts the pkg-built sidecar;
+  CI works around this with a `%__strip /usr/bin/true` macro in `~/.rpmmacros`.
+- **macOS** — Xcode command line tools.
 
 Signing
 -------
 
-### OS X
+Released builds are **unsigned**. `forge.config.ts` switches on
+`NODE_ENV=production`:
 
-1. Get our Apple Developer ID certificate for signing applications distributed
-outside the Mac App Store from the balena.io Apple account.
+- Unset (the default, and what CI uses) — macOS gets an ad-hoc signature, which
+  is the minimum needed for a repackaged arm64 bundle to launch at all. Windows
+  is not signed.
+- `production` — signs with a Developer ID and notarizes via `notarytool`, and
+  signs Windows with `signtool`. This requires `XCODE_APP_LOADER_EMAIL`,
+  `XCODE_APP_LOADER_PASSWORD`, `XCODE_APP_LOADER_TEAM_ID`,
+  `SM_CODE_SIGNING_CERT_SHA1_HASH` and `TIMESTAMP_SERVER`, plus the
+  certificates themselves installed on the runner.
 
-2. Install the Developer ID certificate to your Mac's Keychain by double
-clicking on the certificate file.
-
-The application will be signed automatically using this certificate when
-packaging for OS X.
-
-### Windows
-
-1. Get access to our code signing certificate and decryption key as a balena.io
-employee by asking for it from the relevant people.
-
-2. Place the certificate in the root of the Etcher repository naming it
-`certificate.p12`.
-
-Packaging
----------
-
-Run the following command on each platform:
+Because the published builds are unsigned, SmartScreen warns on Windows, and
+macOS reports the app as damaged until the quarantine flag is cleared:
 
 ```sh
-npm run make
+xattr -dr com.apple.quarantine /Applications/balenaEtcher.app
 ```
 
-This will produce all targets (eg. zip, dmg) specified in forge.config.ts for the
-host platform and architecture.
+The release notes repeat this for anyone downloading a build.
 
-The resulting artifacts can be found in `out/make`.
+Auto-updates
+------------
 
-
-Publishing to Cloudfront
----------------------
-
-We publish GNU/Linux Debian packages to [Cloudfront][cloudfront].
-
-Log in to cloudfront and upload the `rpm` and `deb` files.
-
-Publishing to Homebrew Cask
----------------------------
-
-1. Update [`Casks/etcher.rb`][etcher-cask-file] with the new version and
-   `sha256`
-
-2. Send a PR with the changes above to
-   [`caskroom/homebrew-cask`][homebrew-cask]
-
-Announcing
-----------
-
-Post messages to the [Etcher forum][balena-forum-etcher] announcing the new version
-of Etcher, and including the relevant section of the Changelog.
-
-[aws-cli]: https://aws.amazon.com/cli
-[cloudfront]: https://cloudfront.com
-[etcher-cask-file]: https://github.com/caskroom/homebrew-cask/blob/master/Casks/balenaetcher.rb
-[homebrew-cask]: https://github.com/caskroom/homebrew-cask
-[balena-forum-etcher]: https://forums.balena.io/c/etcher
-[github-releases]: https://github.com/balena-io/etcher/releases
-
-Updating EFP / Success-Banner
------------------------------
-Etcher Featured Project is automatically run based on an algorithm which promoted projects from the balena marketplace which have been contributed by the community, the algorithm prioritises projects which give uses the best experience. Editing both EFP and the Etcher Success-Banner can only be done by someone from balena, instruction are on the [Etcher-EFP repo (private)](https://github.com/balena-io/etcher-efp)
+`packageType` in `package.json` is `local`, which leaves `packageUpdatable`
+false in `lib/gui/etcher.ts`. These builds therefore never check for updates,
+and will not try to replace themselves with an upstream balena release. Keep it
+that way unless you stand up an update feed of your own.
