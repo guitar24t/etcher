@@ -1,0 +1,131 @@
+name: Build
+
+# Builds balenaEtcher for Linux, Windows and macOS. Pushing a `v*` tag also
+# publishes the resulting artifacts to a GitHub release.
+on:
+  push:
+    branches: [master]
+    tags: ['v*']
+  pull_request:
+    branches: [master]
+  workflow_dispatch:
+
+# Builds are unsigned. NODE_ENV is deliberately NOT set to `production`:
+# forge.config.ts only enables Developer ID signing, notarization and Windows
+# signtool when it is, and none of those credentials exist here.
+env:
+  # Must stay in sync with the pkg --target in forge.sidecar.ts. The sidecar
+  # embeds a Node 22 runtime, and `mountutils` is a non-N-API addon that is
+  # rebuilt against whatever Node builds it, so a mismatch produces a sidecar
+  # that cannot load its own native modules at runtime.
+  NODE_VERSION: '22.22.2'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      # One platform failing should not hide the results of the others.
+      fail-fast: false
+      matrix:
+        include:
+          - name: linux-x64
+            os: ubuntu-22.04
+          - name: windows-x64
+            os: windows-2022
+          - name: macos-arm64
+            os: macos-15
+          - name: macos-x64
+            os: macos-15-intel
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Install Linux packaging dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends fakeroot dpkg rpm
+
+      - name: Stop rpmbuild from stripping the sidecar
+        if: runner.os == 'Linux'
+        # rpmbuild strips binaries by default, which corrupts the pkg-built
+        # etcher-util and makes the packaged app unable to flash.
+        run: echo '%__strip  /usr/bin/true' > ~/.rpmmacros
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        # Forge can only build for the host platform/arch, which is why the
+        # matrix uses one runner per target rather than cross-compiling.
+        run: npx electron-forge make
+
+      - name: Collect artifacts
+        shell: bash
+        run: |
+          mkdir -p dist
+          find ./out/make -type f \( \
+            -iname "*.zip"      -o \
+            -iname "*.dmg"      -o \
+            -iname "*.rpm"      -o \
+            -iname "*.deb"      -o \
+            -iname "*.AppImage" -o \
+            -iname "*Setup.exe"    \
+          \) -exec cp {} dist/ \;
+          ls -la dist
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: balenaEtcher-${{ matrix.name }}
+          path: dist/
+          if-no-files-found: error
+          retention-days: 14
+
+  release:
+    name: Publish release
+    needs: build
+    # Only publish for tag pushes, and only if every platform built.
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Gather and checksum
+        run: |
+          mkdir -p dist
+          find artifacts -type f -exec cp {} dist/ \;
+          cd dist
+          sha256sum -- * > SHA256SUMS.txt
+          ls -la
+
+      - name: Publish to GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" dist/* \
+              --repo "$GITHUB_REPOSITORY" --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" dist/* \
+              --repo "$GITHUB_REPOSITORY" \
+              --title "$GITHUB_REF_NAME" \
+              --generate-notes
+          fi

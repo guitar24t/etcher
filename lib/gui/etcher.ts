@@ -202,6 +202,18 @@ async function createMainWindow() {
 		event.preventDefault();
 	});
 
+	// Deny any new BrowserWindow opens from the main renderer (e.g. fallback
+	// new-window navigation that fires when a file is dropped on the window).
+	mainWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+
+	// Cancel downloads the renderer never explicitly initiated. Etcher itself
+	// fetches images through the sidecar, not the renderer session, so a
+	// will-download here always originates from an unwanted default action
+	// (most commonly a file drop falling through to Chromium's downloader).
+	mainWindow.webContents.session.on('will-download', (event: any) => {
+		event.preventDefault();
+	});
+
 	mainWindow.loadURL(MAIN_WINDOW_WEBPACK_ENTRY);
 
 	const page = mainWindow.webContents;

@@ -87,10 +87,15 @@ function build(
 				'--public',
 				'--public-packages',
 				'"*"',
-				// always build for host platform and node version
-				// https://github.com/vercel/pkg-fetch/releases
+				// Pin to a specific recent Node build. The bare `nodeXX`
+				// targets resolve to whatever pkg-fetch knew about at publish
+				// time, which can ship runtimes that segfault on newer host
+				// OSes (e.g. v20.11.1 — and even v20.20.2 — crash on macOS
+				// 26). v22.22.2 is the latest pkg-fetch 3.5.33 ships and runs
+				// cleanly on macOS 26.
+				// https://github.com/yao-pkg/pkg-fetch/releases
 				'--target',
-				`node20-${arch}`,
+				`node22.22.2-${arch}`,
 				'--output',
 				binPath,
 			],
