@@ -3,6 +3,12 @@
 All notable changes to this project will be documented in this file.
 This project adheres to [Semantic Versioning](http://semver.org/).
 
+# v2.1.8
+## (2026-08-25)
+
+* Build on Node 24 [Robert Hilton]
+* Point auto-updates at this fork's own releases instead of leaving them disabled [Robert Hilton]
+
 # v2.1.7
 ## (2026-08-25)
 
